@@ -1,0 +1,12 @@
+raincoat: 1
+coins: 5
+books: 23
+spectacles: 2
+chairs: 12
+pens: 6
+others:
+  notebooks: 5
+  bottles: 88
+some_staff:
+  - name: first
+  - name: second

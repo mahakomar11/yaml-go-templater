@@ -1,0 +1,28 @@
+pipeline_version: 0.0.1
+pipeline_name: mnemosyne-cd-tests
+helm_name: mnemosyne-exp
+
+repository: mnemosyne-cd-tests
+resources:  # resources for project's components only
+  - name: frontend
+    paths:
+      - "frontend/*"
+    image: mnemosyne-cd-tests_frontend
+    code_dir: frontend
+    dockerfile_path: Dockerfile
+  - name: admin
+    paths:
+      - "backend/database/*"
+      - "backend/src/*"
+      - "backend/constants.py"
+    image: mnemosyne-cd-tests_admin
+    code_dir: backend
+    dockerfile_path: "database/Dockerfile"
+  - name: api
+    paths:
+      - "backend/api/*"
+      - "backend/src/*"
+      - "backend/constants.py"
+    image: mnemosyne-cd-tests_api
+    code_dir: backend
+    dockerfile_path: "api/Dockerfile"

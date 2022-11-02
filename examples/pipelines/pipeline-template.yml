@@ -1,0 +1,277 @@
+{{ if .Config.background_image }}
+display:
+  background_image: {{ .Config.background_image }}
+{{ end }}
+
+resource_types:
+  - name: telegram-notification
+    type: registry-image
+    source:
+      repository: w32blaster/concourse-telegram-notifier
+      tag: latest
+
+git: &git_source
+  uri: git@bitbucket.org:bostongene/{{ .Config.repository }}
+  branch: ((branch))
+  private_key: ((bitbucket_private_key))
+
+resources:
+  {{ range $element := .Config.resources }}
+  - name: {{ $element.name }}
+    type: git
+    icon: bitbucket
+    check_every: never
+    webhook_token: (({{ $element.name }}_webhook))
+    source:
+      <<: *git_source
+      paths:
+      {{ range $element := $element.paths }}
+        - {{ $element }}
+      {{ end }}
+  {{ end }}
+
+  - name: cd
+    type: git
+    check_every: never
+    webhook_token: ((concourse_webhook))
+    source:
+      <<: *git_source
+      paths:
+        - "cd/*"
+      ignore_paths:
+        - "cd/Readme.md"
+
+  - name: helm-chart
+    type: git
+    icon: ship-wheel
+    check_every: never
+    webhook_token: ((helm_webhook))
+    source:
+      <<: *git_source
+      paths:
+        - "helm/*"
+      ignore_paths:
+        - "helm/values*.yaml"
+  - name: helm-values
+    type: git
+    icon: ship-wheel
+    check_every: never
+    webhook_token: ((values_webhook))
+    source:
+      <<: *git_source
+      paths:
+        - helm/values.yaml
+        - helm/((helm_values))
+      ignore_paths: []
+
+  - name: version-all
+    type: git
+    check_every: 24h
+    webhook_token: ((version_webhook))
+    source:
+      <<: *git_source
+      branch: ((version_branch))
+      paths:
+        - ((version_dir))/version-*.txt
+      search_remote_refs: true
+  {{ range $element := .Config.resources }}
+  - name: version-{{ $element.name }}
+    type: git
+    check_every: 6h
+    source:
+      <<: *git_source
+      branch: ((version_branch))
+      paths:
+        - ((version_dir))/version-{{ $element.name }}.txt
+  {{ end }}
+
+  - name: telegram-notification
+    type: telegram-notification
+    icon: send
+    source:
+      bot_token: ((bot_token))
+
+success-notification: &success-notification
+  do:
+  - put: telegram-notification
+    params:
+      chat_id: ((telegram_chat_id.((env))))
+      text: "✅ job $BUILD_PIPELINE_NAME/$BUILD_JOB_NAME has succeeded, build $BUILD_NAME.
+      See $ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME?vars.env=%2522((env))%2522"
+
+failure-notification: &failure-notification
+  do:
+  - put: telegram-notification
+    params:
+      chat_id: ((telegram_chat_id.((env))))
+      text: "❌ job $BUILD_PIPELINE_NAME/$BUILD_JOB_NAME has failed, build $BUILD_NAME.
+      See $ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME?vars.env=%2522((env))%2522"
+
+error-notification: &error-notification
+  do:
+  - put: telegram-notification
+    params:
+      chat_id: ((telegram_chat_id.((env))))
+      text: "⚠️job $BUILD_PIPELINE_NAME/$BUILD_JOB_NAME has error, build $BUILD_NAME.
+      See $ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME?vars.env=%2522((env))%2522"
+
+jobs:
+  {{ range $element := .Config.resources }}
+  - name: generate-version-{{ $element.name }}
+    build_log_retention:
+      builds: 20
+    serial: true
+    serial_groups: [ generate-version ]
+    plan:
+      - in_parallel:
+          - get: {{ $element.name }}
+            trigger: true
+            version: every
+          - get: version-all
+          - get: cd
+      - task: generate-version
+        file: cd/cd/tasks/generate-version/task.yml
+        params:
+          VERSION_FILENAME: ((version_dir))/version-{{ $element.name }}.txt
+        vars:
+          version_source: version-all
+          cd_source: cd
+      - put: version-{{ $element.name }}
+        params:
+          repository: out/repository
+          rebase: true
+    on_failure:
+      <<: *failure-notification
+    on_error:
+      <<: *error-notification
+  {{ end }}
+
+  - name: publish-helm-chart
+    serial: true  # ?
+    plan:
+      - in_parallel:
+          - get: cd
+          - get: helm-chart
+            trigger: true
+      - task: publish-helm-chart-task
+        file: cd/cd/tasks/helm-chart/task.yml
+        params:
+          NEXUS_URL: ((nexus_url))
+          NEXUS_USERNAME: ((nexus_username))
+          NEXUS_PASSWORD: ((nexus_password))
+          CHART_DIR: helm-chart
+          CHART_NAME_SUFFIX: ((chart_name_suffix))
+        vars:
+          tools_image: docker.bostongene.internal/concourse/concourse-tools
+          tools_tag: 6
+          chart_resource_name: helm-chart
+          cd_resource_name: cd
+    on_failure:
+      <<: *failure-notification
+    on_error:
+      <<: *error-notification
+
+  {{ range $element := .Config.resources }}
+  - name: build-{{ $element.name }}
+    build_log_retention:
+      builds: 10
+    plan:
+      - in_parallel:
+          - get: version-{{ $element.name }}
+            trigger: true
+            passed: [ generate-version-{{ $element.name }} ]
+          - get: {{ $element.name }}
+          - get: cd
+      - task: build-task
+        privileged: true
+        file: cd/cd/tasks/build-image-buildah/task.yml
+        params:
+          BUILDAH_ISOLATION: chroot
+          IMAGE: "docker-rnd.bostongene.internal/{{ $element.image }}"
+          TAG_FROM: version-{{ $element.name }}/((version_dir))/version-{{ $element.name }}.txt
+          TAG_SUFFIX: ((docker_tag_suffix))
+          CODE_DIR: "{{ $element.name }}/{{ $element.code_dir }}" # Directory containing source code and Dockerfile
+          DOCKERFILE_PATH: {{ $element.dockerfile_path }}
+        vars:
+          base_image: "docker.bostongene.internal/ops/base"
+          base_tag: "latest"
+          service_resoure_name: {{ $element.name }}
+          version_resource_name: version-{{ $element.name }}
+          cd_resource_name: cd
+    on_failure:
+      <<: *failure-notification
+    on_error:
+      <<: *error-notification
+  {{ end }}
+
+  - name: synchronize
+    build_log_retention:
+      builds: 5
+    plan:
+      - in_parallel:
+          - get: cd
+          - get: version-frontend
+            passed: [ build-frontend ]
+            trigger: true
+          - get: version-admin
+            passed: [ build-admin ]
+            trigger: true
+          - get: version-api
+            passed: [ build-api ]
+            trigger: true
+          - get: version-all
+      - task: synchronize-task
+        file: cd/cd/tasks/synchronize/task.yml
+        params:
+          ADMIN_VERSION_FILE: ((version_dir))/version-admin.txt
+          API_VERSION_FILE: ((version_dir))/version-api.txt
+          FRONTEND_VERSION_FILE: ((version_dir))/version-frontend.txt
+
+  - name: deploy
+    build_log_retention:
+      builds: 10
+    plan:
+      - in_parallel:
+          - get: helm-values
+          - get: cd
+          - get: helm-chart
+            trigger: true
+            passed: [ publish-helm-chart ]
+          - get: frontend
+          - get: admin
+          - get: api
+          - get: version-frontend
+            trigger: true
+            passed: [ synchronize ]
+          - get: version-admin
+            trigger: true
+            passed: [ synchronize ]
+          - get: version-api
+            trigger: true
+            passed: [ synchronize ]
+      - task: deploy-task
+        file: cd/cd/tasks/deploy/task.yml
+        params:
+          NAMESPACE: ((namespace))
+          KUBECONFIG_BASE64: ((((cluster)).config))
+          HELM_VALUES_PATH: helm-values/helm
+          HELM_VALUES_FILENAME: ((helm_values))
+          HELM_RELEASE_NAME: {{ .Config.helm_name }}
+          HELM_CHART_NAME: {{ .Config.helm_name }}((chart_name_suffix))
+          HELM_REPO_URL: ((nexus_url))/repository/helm/
+          FRONTEND_VERSION_FROM: version-frontend/((version_dir))/version-frontend.txt
+          ADMIN_VERSION_FROM: version-admin/((version_dir))/version-admin.txt
+          API_VERSION_FROM: version-api/((version_dir))/version-api.txt
+          TAG_SUFFIX: ((docker_tag_suffix))
+        vars:
+          values_resource_name: helm-values
+          cd_resource_name: cd
+          frontend_version_resource: version-frontend
+          admin_version_resource: version-admin
+          api_version_resource: version-api
+    on_failure:
+      <<: *failure-notification
+    on_success:
+      <<: *success-notification
+    on_error:
+      <<: *error-notification

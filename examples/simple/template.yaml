@@ -1,0 +1,11 @@
+benders_chairs: {{ .Config.chairs }}
+other_staff:
+{{ range $key, $value := .Config.others }}
+  - name: {{ $key }}
+    value: {{ $value }}
+{{ end }}
+bottles: {{ .Config.others.bottles }}
+list:
+  {{ range $element := .Config.some_staff }}
+  - name: {{ $element.name | ToUpper }}
+  {{ end }}
