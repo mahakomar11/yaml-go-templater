@@ -8,3 +8,6 @@ RUN go mod download
 
 COPY *.go ./
 RUN go build templater.go
+
+COPY templater /usr/local/bin
+ENTRYPOINT ["./templater"]
