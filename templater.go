@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"gopkg.in/yaml.v3"
 	"io/ioutil"
 	"log"
@@ -13,44 +14,46 @@ type ConfigValues struct {
 	Config map[string]interface{}
 }
 
-func loadConfigValues(valuesFilename string) ConfigValues {
+func loadConfigValues(valuesFilename string) (ConfigValues, error) {
 	yfile, err := ioutil.ReadFile(valuesFilename)
 	if err != nil {
-		log.Fatal("Opening config file: ", err)
+		return ConfigValues{}, fmt.Errorf("opening config file: %w", err)
 	}
 
 	config := make(map[string]interface{})
-	err2 := yaml.Unmarshal(yfile, &config)
-	if err2 != nil {
-		log.Fatal("Parsing config file: ", err2)
+	err = yaml.Unmarshal(yfile, &config)
+	if err != nil {
+		return ConfigValues{}, fmt.Errorf("parsing config file: %w", err)
 	}
 
-	return ConfigValues{config}
+	return ConfigValues{config}, nil
 }
 
-func loadTemplate(templateFilename string) *template.Template {
+func loadTemplate(templateFilename string) (*template.Template, error) {
 	tmpl, err := template.ParseFiles(templateFilename)
 	if err != nil {
-		log.Fatal("Opening template file: ", err)
+		return tmpl, fmt.Errorf("opening template file: %w", err)
 	}
-	return tmpl
+	return tmpl, nil
 }
 
-func createRenderedFile(renderedFilename string, tmpl *template.Template, values ConfigValues) {
+func createRenderedFile(renderedFilename string, tmpl *template.Template, values ConfigValues) error {
 	file, err := os.Create(renderedFilename)
 	if err != nil {
-		log.Fatal("Creating target file: ", err)
+		return fmt.Errorf("creating target file: %w", err)
 	}
 
 	err = tmpl.Execute(file, values)
 	if err != nil {
-		log.Fatal("Applying config values to template: ", err)
+		return fmt.Errorf("applying config values to template: %w", err)
 	}
 
 	err = file.Close()
 	if err != nil {
-		log.Fatal("Closing target file:", err)
+		return fmt.Errorf("closing target file: %w", err)
 	}
+
+	return nil
 }
 
 func main() {
@@ -59,7 +62,16 @@ func main() {
 	targetFilename := flag.String("target", "result.yaml", "Path to target file")
 	flag.Parse()
 
-	tmpl := loadTemplate(*templateFilename)
-	values := loadConfigValues(*configFilename)
-	createRenderedFile(*targetFilename, tmpl, values)
+	tmpl, err := loadTemplate(*templateFilename)
+	if err != nil {
+		log.Fatal("loadTemplate: ", err)
+	}
+	values, err := loadConfigValues(*configFilename)
+	if err != nil {
+		log.Fatal("loadConfigValues: ", err)
+	}
+	err = createRenderedFile(*targetFilename, tmpl, values)
+	if err != nil {
+		log.Fatal("createRenderedFile: ", err)
+	}
 }

@@ -1,8 +1,11 @@
 pipeline_version: 0.0.1
 pipeline_name: mnemosyne-cd-tests
-helm_name: mnemosyne-exp
 
-repository: mnemosyne-cd-tests
+helm_name: mnemosyne-cd-tests
+
+background_image: https://miro.medium.com/max/1400/1*ZDuUgiHz_PiMPQAUEiwzUA.jpeg
+
+repository: git@bitbucket.org:bostongene/mnemosyne
 resources:  # resources for project's components only
   - name: frontend
     paths:
@@ -10,14 +13,16 @@ resources:  # resources for project's components only
     image: mnemosyne-cd-tests_frontend
     code_dir: frontend
     dockerfile_path: Dockerfile
+    helm_name: frontend
   - name: admin
     paths:
       - "backend/database/*"
       - "backend/src/*"
       - "backend/constants.py"
-    image: mnemosyne-cd-tests_admin
+    image: mnemosyne-cd-tests_db
     code_dir: backend
     dockerfile_path: "database/Dockerfile"
+    helm_name: admin
   - name: api
     paths:
       - "backend/api/*"
@@ -26,3 +31,90 @@ resources:  # resources for project's components only
     image: mnemosyne-cd-tests_api
     code_dir: backend
     dockerfile_path: "api/Dockerfile"
+    helm_name: api
+
+envs:
+  - name: test
+    vars:
+      branch: set-pipelines
+      version_branch: version
+      version_dir: version-cd-test
+      concourse_webhook: 638f9174-74e6-4559-8a2d-bf8a55d7022b
+      version_webhook: 59d146f0-0b5f-4511-a339-b0de3e71cdb6
+      values_webhook: bf48fb84-317f-4a58-8136-374b8268a492
+      helm_webhook: 427dd068-156c-48c1-bb95-3f0dbd103717
+      chart_name_suffix: ""
+      docker_tag_suffix: ""
+      cluster: paas-rax-midgard
+      namespace: test-hephaestus
+      helm_values: values.test.yaml
+      nexus_url: https://nexus.bostongene.internal
+      frontend_webhook: aa461371-4a2d-48f5-b9c3-8eb914a992da
+      admin_webhook: 6980b492-3c12-4678-a900-92d3ff2a792c
+      api_webhook: 201a7a91-a5a2-4054-ad31-2629db43471a
+  - name: dev
+    vars:
+      branch: release
+      version_branch: version
+      version_dir: version-dev
+      concourse_webhook: bf33900e-20f5-48c5-8ffe-e8fa6edebf8d
+      version_webhook: b6669991-dfff-4f9c-b964-a4055d8f362b
+      values_webhook: 19dbc9d9-fbba-4726-9303-1a3a54f2b623
+      helm_webhook: e6faf270-d522-4942-810f-98ea542fa040
+      chart_name_suffix: "-dev"
+      docker_tag_suffix: "-dev"
+      cluster: paas-rax-midgard
+      namespace: dev-hephaestus
+      helm_values: values.dev.yaml
+      nexus_url: https://nexus.bostongene.internal
+      frontend_webhook: 5b0aaa16-32c8-493d-8f84-46a5d6da1a41
+      admin_webhook: 20e78160-67d4-4256-8a02-750fc3a39977
+      api_webhook: b46b0281-d065-4ac9-977d-6ffad2dfaaf7
+  - name: rnd
+    vars:
+      branch: master
+      version_branch: version
+      version_dir: version-rnd
+      concourse_webhook: 8227a872-cada-46ae-a0e8-8d988d5c54fe
+      version_webhook: 99cdb1c7-4f86-49d8-ac2a-6bb41dc47b01
+      values_webhook: 7178716f-383c-40ad-8d4c-a4e097f719f0
+      helm_webhook: 577a6eec-d9ef-4152-ba49-1c66363f8548
+      chart_name_suffix: "-rnd"
+      docker_tag_suffix: "-rnd"
+      cluster: paas-rax-midgard
+      namespace: rnd-hephaestus
+      helm_values: values.rnd.yaml
+      nexus_url: https://nexus.bostongene.internal
+      frontend_webhook: 31bfbd76-088d-4fd9-a0d4-7b0aacd54ee2
+      admin_webhook: 2df6f091-4526-4716-a617-bc776d9c97c5
+      api_webhook: 33e2b21c-56e9-434f-bc38-bff9fc16e36d
+  - name: ldt
+    vars:
+      branch: production
+      version_branch: version
+      version_dir: version-ldt
+      concourse_webhook: 9eae7edb-ffcb-4d9f-bf27-78fd00ce3b74
+      version_webhook: 60461d65-252f-437b-8310-235fe53f6d72
+      values_webhook: 7f0c6a85-4d6e-4602-92c0-73b5e4f85e69
+      helm_webhook: 87d132b8-f1fc-4307-b965-a515de879dc9
+      chart_name_suffix: "-ldt"
+      docker_tag_suffix: "-ldt"
+      cluster: paas-aws-karazhan
+      namespace: ldt-hephaestus
+      helm_values: values.ldt.yaml
+      nexus_url: https://nexus.bostongene.internal
+      frontend_webhook: b587a0bb-8978-4072-9a1e-a8f243fbc646
+      admin_webhook: cd921559-abc3-41d0-b513-f9640971c0d7
+      api_webhook: b0a9e2f0-5b63-4dcb-99d2-658206c3f28e
+
+gitflow:
+  develop_webhook: 7eea2ec7-d439-4b2b-821a-453e079222e1
+  release_webhook: e7969856-14ef-40e2-9194-2b44522fcb0d
+  master_webhook: d7e4993b-5742-40ed-b0dd-34c593e5271e
+  master_hotfixes_webhook: d5dc4a7e-ceb5-4dd9-966b-c6d71a261120
+  release_fixes_webhook: b4beb594-8e8f-4e9a-a392-2af35a0f8b72
+
+check_pr:
+  repo: mnemosyne
+  to_check_flake: false
+  pr_webhook: 0d170288-986c-4e9c-8192-2070c75c9059

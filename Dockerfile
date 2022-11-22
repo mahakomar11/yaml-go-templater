@@ -1,4 +1,4 @@
-FROM golang:1.16-alpine
+FROM golang:1.19-alpine AS build_base
 
 WORKDIR /app
 
@@ -7,7 +7,9 @@ COPY go.sum ./
 RUN go mod download
 
 COPY *.go ./
-RUN go build templater.go
+RUN go build -o ./templater templater.go
 
-COPY templater /usr/local/bin
-ENTRYPOINT ["./templater"]
+FROM alpine:3.9
+
+COPY --from=build_base /app/templater /usr/local/bin
+ENTRYPOINT ["templater"]

@@ -1,0 +1,165 @@
+display:
+  background_image: https://images.fineartamerica.com/images/artworkimages/mediumlarge/3/ouroboros-shania-zaenab-hartati.jpg
+
+git_cd: &git_cd
+  uri: git@bitbucket.org:bostongene/hephaestus-tools
+  branch: ((cd_branch))
+  private_key: ((bitbucket_private_key))
+
+resources:
+  - name: templates
+    type: git
+    icon: bitbucket
+    check_every: 6m
+    source:
+      <<: *git_cd
+      paths:
+        - concourse/templates/*
+
+  - name: config
+    type: git
+    icon: bitbucket
+    check_every: 6m
+    source:
+      uri: ((repo))
+      branch: ((repo_branch))
+      private_key: ((bitbucket_private_key))
+      paths:
+        - cd/pipeline-config.yml
+
+jobs:
+  - name: set-self
+    plan:
+      - in_parallel:
+          - get: config
+            trigger: true
+          - get: templates
+      - task: render-self
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source:
+              repository: docker-rnd.bostongene.internal/yaml-go-templater
+              tag: latest
+          inputs:
+            - name: templates
+            - name: config
+          outputs:
+            - name: rendered-self
+              path: .
+          run:
+            path: templater
+            args:
+              - -template=templates/concourse/templates/basic-pipeline-template.yml
+              - -config=config/cd/pipeline-config.yml
+              - -target=rendered-self.yml
+      - set_pipeline: self
+        file: rendered-self/rendered-self.yml
+        vars:
+          repo: ((repo))
+          repo_branch: ((repo_branch))
+          cd_branch: ((cd_branch))
+
+  - name: set-pipelines
+    plan:
+      - in_parallel:
+          - get: templates
+          - get: config
+            trigger: true
+            passed: [ set-self ]
+      - task: render-pipeline
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source:
+              repository: docker-rnd.bostongene.internal/yaml-go-templater
+              tag: latest
+          inputs:
+            - name: templates
+            - name: config
+          outputs:
+            - name: rendered-pipeline
+              path: .
+          run:
+            path: templater
+            args:
+              - -template=templates/concourse/templates/pipeline-template.yml
+              - -config=config/cd/pipeline-config.yml
+              - -target=rendered-pipeline.yml
+      {{ $pipeline_name := .Config.pipeline_name }}
+      {{ range $element := .Config.envs }}
+      - set_pipeline: {{ $pipeline_name }}
+        file: rendered-pipeline/rendered-pipeline.yml
+        instance_vars:
+          env: {{ $element.name }}
+        vars:
+          {{ range $key, $value := $element.vars }}
+            {{ $key }}: "{{ $value }}"
+          {{ end }}
+      {{ end }}
+
+  - name: set-gitflow
+    plan:
+      - in_parallel:
+          - get: templates
+          - get: config
+            trigger: true
+            passed: [ set-self ]
+      - task: render-gitflow-pipeline
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source:
+              repository: docker-rnd.bostongene.internal/yaml-go-templater
+              tag: latest
+          inputs:
+            - name: templates
+            - name: config
+          outputs:
+            - name: rendered-pipeline
+              path: .
+          run:
+            path: templater
+            args:
+              - -template=templates/concourse/templates/gitflow-template.yml
+              - -config=config/cd/pipeline-config.yml
+              - -target=rendered-pipeline.yml
+      - set_pipeline: {{ $pipeline_name }}
+        file: rendered-pipeline/rendered-pipeline.yml
+        instance_vars:
+          env: gitflow
+
+  - name: set-check-pr
+    plan:
+      - in_parallel:
+          - get: templates
+          - get: config
+            trigger: true
+            passed: [ set-self ]
+      - task: render-check-pr-pipeline
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source:
+              repository: docker-rnd.bostongene.internal/yaml-go-templater
+              tag: latest
+          inputs:
+            - name: templates
+            - name: config
+          outputs:
+            - name: rendered-pipeline
+              path: .
+          run:
+            path: templater
+            args:
+              - -template=templates/concourse/templates/check-pr-template.yml
+              - -config=config/cd/pipeline-config.yml
+              - -target=rendered-pipeline.yml
+      - set_pipeline: {{ $pipeline_name }}
+        file: rendered-pipeline/rendered-pipeline.yml
+        instance_vars:
+          env: check-pr

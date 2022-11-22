@@ -11,7 +11,7 @@ resource_types:
       tag: latest
 
 git: &git_source
-  uri: git@bitbucket.org:bostongene/{{ .Config.repository }}
+  uri: {{ .Config.repository }}
   branch: ((branch))
   private_key: ((bitbucket_private_key))
 
@@ -25,21 +25,20 @@ resources:
     source:
       <<: *git_source
       paths:
-      {{ range $element := $element.paths }}
+        {{ range $element := $element.paths }}
         - {{ $element }}
-      {{ end }}
+        {{ end }}
   {{ end }}
 
   - name: cd
     type: git
-    check_every: never
-    webhook_token: ((concourse_webhook))
+    check_every: 24h
     source:
-      <<: *git_source
+      uri: git@bitbucket.org:bostongene/hephaestus-tools
+      branch: DAP-3659-unify-cd-scripts-and-tasks
+      private_key: ((bitbucket_private_key))
       paths:
-        - "cd/*"
-      ignore_paths:
-        - "cd/Readme.md"
+        - concourse/tasks/*
 
   - name: helm-chart
     type: git
@@ -74,6 +73,7 @@ resources:
       paths:
         - ((version_dir))/version-*.txt
       search_remote_refs: true
+
   {{ range $element := .Config.resources }}
   - name: version-{{ $element.name }}
     type: git
@@ -116,7 +116,7 @@ error-notification: &error-notification
       See $ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME?vars.env=%2522((env))%2522"
 
 jobs:
-  {{ range $element := .Config.resources }}
+{{ range $element := .Config.resources }}
   - name: generate-version-{{ $element.name }}
     build_log_retention:
       builds: 20
@@ -130,7 +130,7 @@ jobs:
           - get: version-all
           - get: cd
       - task: generate-version
-        file: cd/cd/tasks/generate-version/task.yml
+        file: cd/concourse/tasks/generate-version/task.yml
         params:
           VERSION_FILENAME: ((version_dir))/version-{{ $element.name }}.txt
         vars:
@@ -144,7 +144,7 @@ jobs:
       <<: *failure-notification
     on_error:
       <<: *error-notification
-  {{ end }}
+{{ end }}
 
   - name: publish-helm-chart
     serial: true  # ?
@@ -154,7 +154,7 @@ jobs:
           - get: helm-chart
             trigger: true
       - task: publish-helm-chart-task
-        file: cd/cd/tasks/helm-chart/task.yml
+        file: cd/concourse/tasks/helm-chart/task.yml
         params:
           NEXUS_URL: ((nexus_url))
           NEXUS_USERNAME: ((nexus_username))
@@ -184,7 +184,7 @@ jobs:
           - get: cd
       - task: build-task
         privileged: true
-        file: cd/cd/tasks/build-image-buildah/task.yml
+        file: cd/concourse/tasks/build-image-buildah/task.yml
         params:
           BUILDAH_ISOLATION: chroot
           IMAGE: "docker-rnd.bostongene.internal/{{ $element.image }}"
@@ -210,22 +210,31 @@ jobs:
     plan:
       - in_parallel:
           - get: cd
-          - get: version-frontend
-            passed: [ build-frontend ]
+          {{ range $element := .Config.resources }}
+          - get: version-{{ $element.name }}
+            passed: [ build-{{ $element.name }} ]
             trigger: true
-          - get: version-admin
-            passed: [ build-admin ]
-            trigger: true
-          - get: version-api
-            passed: [ build-api ]
-            trigger: true
+          {{ end }}
           - get: version-all
-      - task: synchronize-task
-        file: cd/cd/tasks/synchronize/task.yml
+      {{ range $element := .Config.resources }}
+      - task: synchronize-{{ $element.name }}-task
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source:
+              repository: busybox
+          inputs:
+            - name: cd
+            - name: version-all
+            - name: version-{{ $element.name }}
+          run:
+            path: /bin/sh
+            args: [ "./cd/concourse/tasks/synchronize/task.sh" ]
         params:
-          ADMIN_VERSION_FILE: ((version_dir))/version-admin.txt
-          API_VERSION_FILE: ((version_dir))/version-api.txt
-          FRONTEND_VERSION_FILE: ((version_dir))/version-frontend.txt
+          VERSION_RESOURCE: version-{{ $element.name }}
+          VERSION_FILE: ((version_dir))/version-{{ $element.name }}.txt
+      {{ end }}
 
   - name: deploy
     build_log_retention:
@@ -237,38 +246,41 @@ jobs:
           - get: helm-chart
             trigger: true
             passed: [ publish-helm-chart ]
-          - get: frontend
-          - get: admin
-          - get: api
-          - get: version-frontend
+          {{ range $element := .Config.resources }}
+          - get: {{ $element.name }}
+          - get: version-{{ $element.name }}
             trigger: true
             passed: [ synchronize ]
-          - get: version-admin
-            trigger: true
-            passed: [ synchronize ]
-          - get: version-api
-            trigger: true
-            passed: [ synchronize ]
+          {{ end }}
       - task: deploy-task
-        file: cd/cd/tasks/deploy/task.yml
-        params:
-          NAMESPACE: ((namespace))
-          KUBECONFIG_BASE64: ((((cluster)).config))
-          HELM_VALUES_PATH: helm-values/helm
-          HELM_VALUES_FILENAME: ((helm_values))
-          HELM_RELEASE_NAME: {{ .Config.helm_name }}
-          HELM_CHART_NAME: {{ .Config.helm_name }}((chart_name_suffix))
-          HELM_REPO_URL: ((nexus_url))/repository/helm/
-          FRONTEND_VERSION_FROM: version-frontend/((version_dir))/version-frontend.txt
-          ADMIN_VERSION_FROM: version-admin/((version_dir))/version-admin.txt
-          API_VERSION_FROM: version-api/((version_dir))/version-api.txt
-          TAG_SUFFIX: ((docker_tag_suffix))
-        vars:
-          values_resource_name: helm-values
-          cd_resource_name: cd
-          frontend_version_resource: version-frontend
-          admin_version_resource: version-admin
-          api_version_resource: version-api
+        config:
+          platform: linux
+          image_resource:
+            type: docker-image
+            source:
+              repository: docker.bostongene.internal/concourse/pipeline-base
+              tag: 5
+          inputs:
+            - name: helm-values
+            - name: cd
+            {{ range $element := .Config.resources }}
+            - name: version-{{ $element.name }}
+            {{ end }}
+          run:
+            path: cd/concourse/tasks/deploy/task.sh
+          params:
+            NAMESPACE: ((namespace))
+            KUBECONFIG_BASE64: ((((cluster)).config))
+            HELM_VALUES_PATH: helm-values/helm
+            HELM_VALUES_FILENAME: ((helm_values))
+            HELM_RELEASE_NAME: {{ .Config.helm_name }}
+            HELM_CHART_NAME: {{ .Config.helm_name }}((chart_name_suffix))
+            HELM_REPO_URL: ((nexus_url))/repository/helm/
+            TAG_SUFFIX: ((docker_tag_suffix))
+            TAGS_FROM:
+              {{ range $element := .Config.resources }}
+                {{ $element.helm_name }}: version-{{ $element.name }}/((version_dir))/version-{{ $element.name }}.txt
+              {{ end }}
     on_failure:
       <<: *failure-notification
     on_success:
